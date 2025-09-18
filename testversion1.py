@@ -12,11 +12,20 @@ from webdriver_manager.chrome import ChromeDriverManager
 # LangChain 연동을 위한 라이브러리 임포트
 from langchain_naver import ChatClovaX
 
-# --- 네이버 CLOVA API 연동 함수 (LangChain 적용) ---
+# --- 1. 네이버 CLOVA API 연동 함수 (LangChain 적용) ---
 
 def generate_blog_post_from_review(clova_studio_api_key: str, review_text: str) -> tuple[str, str, list]:
     """
-    langchain-naver 라이브러리를 사용하여 CLOVA X API를 호출하고 블로그 글로 변환합니다.
+    langchain-naver 라이브러리를 사용하여 CLOVA X API를 호출하고,
+    입력된 계약 리뷰를 바탕으로 블로그 게시글(제목, 본문, 태그)을 생성합니다.
+
+    Args:
+        clova_studio_api_key (str): 네이버 CLOVA Studio API 키.
+        review_text (str): 사용자가 입력한 계약 리뷰 텍스트.
+
+    Returns:
+        tuple[str, str, list]: 생성된 블로그의 (제목, 본문, 태그 리스트).
+                               오류 발생 시, (에러 메시지, 상세 내용, 빈 리스트)를 반환합니다.
     """
     # LangChain은 환경 변수를 통해 API 키를 읽는 것을 권장합니다.
     os.environ["CLOVASTUDIO_API_KEY"] = clova_studio_api_key
@@ -31,7 +40,7 @@ def generate_blog_post_from_review(clova_studio_api_key: str, review_text: str) 
             repeat_penalty=5.0
         )
 
-        # 2. AI에게 역할을 부여하고, 원하는 결과물의 형식을 JSON으로 명확하게 지정
+        # 2. AI에게 역할을 부여하고, 원하는 결과물의 형식을 JSON으로 명확하게 지정하는 프롬프트
         prompt = f"""
 당신은 기업의 성공적인 고객 사례를 바탕으로, 잠재 고객의 마음을 사로잡는 스토리텔러이자 전문 마케터입니다.
 
@@ -50,7 +59,7 @@ def generate_blog_post_from_review(clova_studio_api_key: str, review_text: str) 
 JSON 구조 자체에 줄바꿈을 포함해서는 안 됩니다.
 **중요: "content" 값 내부에 포함되는 모든 줄바꿈과 특수문자는 반드시 유효한 JSON 형식에 맞게 이스케이프(escape) 처리해야 합니다. (예: 줄바꿈은 \\n 으로 표현)**
 
-- "title": 블로그 제목 (검색에 유리하도록 고객사와 핵심 솔루션을 포함)
+- "title": 블로그 제목 (검색에 유리하도록 고객사와 핵심 해결 방안을 포함)
 - "content": 블로그 본문 (Markdown 형식, 소제목 사용)
 - "tags": 추천 해시태그 5개 (리스트 형식)
 
@@ -61,13 +70,12 @@ JSON 구조 자체에 줄바꿈을 포함해서는 안 됩니다.
 """
         # 3. 모델 호출 (invoke 사용)
         ai_msg = chat.invoke(prompt)
-        
-        # 4. AI 응답에서 순수한 JSON 부분만 추출 (오류 해결 로직)
+
+        # 4. AI 응답에서 순수한 JSON 부분만 추출 (가끔 응답 앞뒤에 불필요한 텍스트가 붙는 경우 방지)
         response_text = ai_msg.content
-        # '{'가 시작하는 부분부터 '}'가 끝나는 부분까지 잘라내기
         json_start_index = response_text.find('{')
         json_end_index = response_text.rfind('}') + 1
-        
+
         if json_start_index != -1 and json_end_index != 0:
             json_str = response_text[json_start_index:json_end_index]
             result_json = json.loads(json_str)
@@ -78,16 +86,23 @@ JSON 구조 자체에 줄바꿈을 포함해서는 안 됩니다.
 
     except Exception as e:
         st.error(f"CLOVA API 호출 중 오류가 발생했습니다: {e}")
-        # LangChain 사용 시 response.text가 없으므로 오류 메시지만 출력
-        return "API 호출 실패", f"오류가 발생했습니다: {e}", []
+        return "API 호출 실패", f"오류가 발생했습니다. API 키와 입력 내용을 확인해주세요. \n\n상세 오류: {e}", []
 
 
-# --- Selenium 블로그 포스팅 함수 ---
+# --- 2. Selenium 블로그 포스팅 함수 ---
 
 def post_to_naver_blog(title: str, content: str, tags: list):
     """
     Selenium을 이용해 네이버 블로그에 자동으로 글을 발행합니다.
-    로그인은 사용자가 직접 한 번만 수행하면 세션이 유지됩니다.
+    사용자가 직접 한 번만 로그인하면, 지정된 프로필 폴더에 세션이 유지됩니다.
+
+    Args:
+        title (str): 블로그 게시글 제목.
+        content (str): 블로그 게시글 본문 (Markdown).
+        tags (list): 해시태그 리스트.
+
+    Returns:
+        bool: 포스팅 성공 여부.
     """
     driver = None # 드라이버 변수 초기화
     try:
@@ -96,61 +111,62 @@ def post_to_naver_blog(title: str, content: str, tags: list):
         profile_path = os.path.join(os.getcwd(), "naver_blog_profile")
         options = webdriver.ChromeOptions()
         options.add_argument(f"user-data-dir={profile_path}")
-        # 안정성 향상을 위한 옵션 추가
-        #options.add_argument("--headless")  # 백그라운드에서 실행
+        # 안정성 향상을 위한 옵션 (특히 서버 환경에서 유용)
+        # options.add_argument("--headless")  # 백그라운드 실행. 최초 로그인 시에는 주석 처리 필요.
         options.add_argument("--no-sandbox")
         options.add_argument("--disable-dev-shm-usage")
         options.add_argument("--disable-gpu")
-        
+
         service = Service(ChromeDriverManager().install())
         driver = webdriver.Chrome(service=service, options=options)
         wait = WebDriverWait(driver, 20)
 
         # --- 네이버 블로그 글쓰기 페이지 접속 ---
+        # 특정 카테고리에 글을 작성하도록 URL 지정
         write_url = "https://blog.naver.com/kkkyor?Redirect=Write&categoryNo=1"
         driver.get(write_url)
-        time.sleep(3) # 페이지 로딩 대기
+        time.sleep(3)
 
         # --- 로그인 상태 확인 및 안내 ---
-        # 현재 URL이 'login'을 포함하면 로그인 페이지로 간주
         if "login" in driver.current_url.lower():
             st.warning("⚠️ **최초 1회 수동 로그인이 필요합니다.**")
-            st.info("1. 수동으로 로그인을 진행해야 합니다. 코드 실행을 잠시 중단하고 일반 Chrome 브라우저에서 네이버에 로그인해주세요.\n"
-                    "2. **'로그인 상태 유지'**에 반드시 체크하세요.\n"
-                    "3. 로그인이 완료되면, 다시 [발행하기] 버튼을 눌러주세요.")
-            return False # 로그인 필요하므로 발행 중단
+            st.info(
+                "1. 지금 열린 Chrome 브라우저에서 네이버 로그인을 진행해주세요.\n"
+                "2. **'로그인 상태 유지'**에 반드시 체크하세요.\n"
+                "3. 로그인이 완료되면, 브라우저를 닫고 다시 [발행하기] 버튼을 눌러주세요."
+            )
+            return False
 
         # --- 글쓰기 ---
         st.info("로그인 상태가 확인되었습니다. 블로그 글 작성을 시작합니다...")
-        # 글쓰기 페이지의 메인 프레임으로 전환
-        wait.until(EC.presence_of_element_located((By.ID, "mainFrame")))
-        driver.switch_to.frame("mainFrame")
-        
+        wait.until(EC.frame_to_be_available_and_switch_to_it((By.ID, "mainFrame")))
+
         # 제목 입력
-        title_input = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, ".se-title-input__input")))
-        title_input.click()
+        title_input = wait.until(EC.visibility_of_element_located((By.CSS_SELECTOR, ".se-title-input__input")))
         pyperclip.copy(title)
+        title_input.click()
+        title_input.clear()
         title_input.send_keys(pyperclip.paste())
         time.sleep(1)
 
-        # 본문 입력
-        content_body = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, ".se-main-container")))
+        # 본문 입력 (pyperclip을 사용해 클립보드 기반 붙여넣기)
+        content_body = wait.until(EC.visibility_of_element_located((By.CSS_SELECTOR, ".se-main-container")))
         content_body.click()
-        # 본문 내용이 비어있다면 초기화
-        driver.execute_script("arguments[0].innerHTML = ''", content_body)
         pyperclip.copy(content)
         content_body.send_keys(pyperclip.paste())
         time.sleep(2)
 
         # 태그 입력
-        tag_button = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, ".btn_tag")))
-        tag_button.click()
-        time.sleep(1)
-        
-        tag_input = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, ".se-tag-input__input")))
-        for tag in tags:
-            tag_input.send_keys(tag + "\n") # 태그 입력 후 엔터
-            time.sleep(0.5)
+        try:
+            tag_button = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, ".btn_tag")))
+            tag_button.click()
+            time.sleep(1)
+            tag_input = wait.until(EC.visibility_of_element_located((By.CSS_SELECTOR, ".se-tag-input__input")))
+            for tag in tags:
+                tag_input.send_keys(tag.strip() + "\n")
+                time.sleep(0.5)
+        except Exception as tag_e:
+            st.warning(f"태그 입력 중 작은 오류가 발생했으나, 발행을 계속 진행합니다: {tag_e}")
 
         # --- 발행 ---
         st.info("최종 발행을 진행합니다...")
@@ -161,10 +177,8 @@ def post_to_naver_blog(title: str, content: str, tags: list):
         # 최종 발행 확인 버튼 클릭
         final_publish_button = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, ".btn_confirm")))
         final_publish_button.click()
-        
-        # 발행 완료까지 잠시 대기
-        time.sleep(5)
-        
+        time.sleep(5) # 발행 완료까지 대기
+
         return True
 
     except Exception as e:
@@ -176,13 +190,13 @@ def post_to_naver_blog(title: str, content: str, tags: list):
             driver.quit()
 
 
-# --- Streamlit UI 구성 ---
+# --- 3. Streamlit UI 구성 ---
 
 st.set_page_config(page_title="AI 블로그 포스팅 자동화", layout="wide")
 st.title("💼 영업사원을 위한 계약 리뷰 -> 블로그 포스팅 자동화 툴")
 st.info("좌측에 계약 리뷰를 입력하고 단계별 버튼을 클릭하여 블로그 글을 완성하고 발행해보세요.")
 
-# 세션 상태 초기화
+# 세션 상태(st.session_state)를 사용하여 데이터 유지
 if 'blog_title' not in st.session_state:
     st.session_state.blog_title = ""
 if 'blog_content' not in st.session_state:
@@ -203,7 +217,6 @@ with col1:
     contract_review = st.text_area("이곳에 계약 리뷰나 미팅 노트를 붙여넣으세요.", height=250, value=sample_review)
     
     st.subheader("2단계: 블로그 초안 생성")
-    # LangChain 연동으로 API Key 하나만 필요
     clova_studio_api_key = st.text_input("CLOVA Studio API Key", type="password", help="CLOVA Studio > 내 프로젝트 > API Key 탭에서 복사하세요.")
     
     if st.button("✨ AI로 블로그 글 생성하기", use_container_width=True):
@@ -215,26 +228,29 @@ with col1:
                 st.session_state.blog_title = title
                 st.session_state.blog_content = content
                 st.session_state.blog_tags = tags
-            st.success("블로그 초안 생성이 완료되었습니다! 우측에서 내용을 확인하고 수정하세요.")
+            
+            if title != "API 호출 실패":
+                st.success("블로그 초안 생성이 완료되었습니다! 우측에서 내용을 확인하고 수정하세요.")
 
 with col2:
     st.subheader("3단계: 검토, 수정 및 발행")
     if st.session_state.blog_title:
         edited_title = st.text_input("제목", value=st.session_state.blog_title)
         edited_content = st.text_area("본문", value=st.session_state.blog_content, height=400)
+        
+        # 태그를 문자열로 변환하여 표시하고, 다시 리스트로 변환
         tags_str = ", ".join(st.session_state.blog_tags)
-        edited_tags_str = st.text_input("태그", value=tags_str)
-        edited_tags = [tag.strip() for tag in edited_tags_str.split(',')]
+        edited_tags_str = st.text_input("태그 (쉼표로 구분)", value=tags_str)
+        edited_tags = [tag.strip() for tag in edited_tags_str.split(',') if tag.strip()]
 
         st.markdown("---")
         st.subheader("4단계: 네이버 블로그 발행")
         
         if st.button("🚀 네이버 블로그에 발행하기", type="primary", use_container_width=True):
-            with st.spinner("블로그 발행을 시작합니다..."):
+            with st.spinner("블로그 발행을 시작합니다... 브라우저가 실행됩니다."):
                 success = post_to_naver_blog(edited_title, edited_content, edited_tags)
             if success:
                 st.success("블로그 포스팅이 성공적으로 완료되었습니다!")
                 st.balloons()
     else:
         st.info("좌측에서 [AI로 블로그 글 생성하기] 버튼을 누르면 여기에 초안이 표시됩니다.")
-
