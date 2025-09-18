@@ -1,0 +1,6 @@
+streamlit
+pyperclip
+selenium
+webdriver-manager
+langchain-naver
+langchain
